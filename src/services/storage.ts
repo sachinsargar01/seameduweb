@@ -431,6 +431,60 @@ export class StorageService {
     }
   }
 
+  static deleteAlumni(id: string, userId: string = 'admin', userName: string = 'Admin', reason: string = 'Deleted by Admin'): Alumni | null {
+    const list = this.getAlumni();
+    const idx = list.findIndex(a => a.id === id);
+    if (idx === -1) return null;
+    const [deleted] = list.splice(idx, 1);
+    this.saveAlumni(list);
+    this.archiveRecord({
+      originalId: id,
+      entityType: 'ALUMNI',
+      archivedByUserId: userId,
+      archivedByUserName: userName,
+      reason,
+      data: deleted,
+    });
+    this.addAuditLog({
+      entityType: 'ALUMNI',
+      entityId: id,
+      action: 'DELETE',
+      performedByUserId: userId,
+      performedByUserName: userName,
+      performedByRole: 'ADMIN',
+      details: `Permanently deleted Alumni ${deleted.name} (${id}) from active directory`,
+      previousState: deleted,
+    });
+    return deleted;
+  }
+
+  static deleteLead(id: string, userId: string = 'admin', userName: string = 'Admin', reason: string = 'Deleted by Admin'): Lead | null {
+    const list = this.getLeads();
+    const idx = list.findIndex(l => l.id === id);
+    if (idx === -1) return null;
+    const [deleted] = list.splice(idx, 1);
+    this.saveLeads(list);
+    this.archiveRecord({
+      originalId: id,
+      entityType: 'LEAD',
+      archivedByUserId: userId,
+      archivedByUserName: userName,
+      reason,
+      data: deleted,
+    });
+    this.addAuditLog({
+      entityType: 'LEAD',
+      entityId: id,
+      action: 'DELETE',
+      performedByUserId: userId,
+      performedByUserName: userName,
+      performedByRole: 'ADMIN',
+      details: `Permanently deleted Lead ${deleted.referenceName} (${id})`,
+      previousState: deleted,
+    });
+    return deleted;
+  }
+
   // SC USERS
   static getSCUsers(): SCUser[] {
     this.initialize();

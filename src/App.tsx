@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   HashRouter,
   Routes,
@@ -14,6 +14,8 @@ import { AlumniCallModal } from './components/AlumniCallModal';
 import { LeadDetailsModal } from './components/LeadDetailsModal';
 import { ImportAlumniModal } from './components/ImportAlumniModal';
 import { GasSetupModal } from './components/GasSetupModal';
+import { StorageService } from './services/storage';
+import { ApiService } from './services/api';
 
 import { DashboardPage } from './pages/DashboardPage';
 import { AlumniPage } from './pages/AlumniPage';
@@ -44,6 +46,27 @@ const MainWorkspace: React.FC = () => {
   const [filterScId, setFilterScId] = useState<string | undefined>(undefined);
   const [globalSearch, setGlobalSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Persistent Auto-Initialization for connected Google Sheet on refresh / application startup
+  useEffect(() => {
+    const settings = StorageService.getSettings();
+    if (settings.googleWebAppUrl && settings.lastSyncStatus !== 'DISCONNECTED') {
+      const initConnection = async () => {
+        try {
+          // Initialize sheet tabs and schema if needed
+          await ApiService.initSheets();
+          // Fetch latest records from connected Google Sheet and sync local storage
+          const result = await ApiService.fetchAllRecords(role === 'SC' ? user?.id : undefined);
+          if (result.success) {
+            setRefreshKey((prev) => prev + 1);
+          }
+        } catch (err) {
+          console.warn('[App] Google Sheet persistent auto-initialization warning:', err);
+        }
+      };
+      initConnection();
+    }
+  }, [user?.id, role]);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;

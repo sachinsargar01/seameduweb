@@ -31,6 +31,7 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
   const [spreadsheetId, setSpreadsheetId] = useState(
     currentSettings.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS'
   );
+  const isCurrentlyConnected = Boolean(currentSettings.googleWebAppUrl && currentSettings.lastSyncStatus !== 'DISCONNECTED');
   const [copiedCode, setCopiedCode] = useState(false);
   const [testResult, setTestResult] = useState<{
     tested: boolean;
@@ -38,6 +39,8 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
     message: string;
   } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [activeTab, setActiveTab] = useState<'config' | 'code' | 'schema'>('config');
 
   if (!isOpen) return null;
@@ -67,16 +70,56 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
     setIsTesting(false);
   };
 
-  const handleSaveSettings = () => {
-    StorageService.saveSettings({
-      ...currentSettings,
-      googleWebAppUrl: gasUrl.trim(),
-      spreadsheetId: spreadsheetId.trim(),
-      lastSyncTime: new Date().toISOString(),
-    });
-    if (onSave) onSave();
-    alert('Google Apps Script configuration saved successfully!');
-    onClose();
+  const handleConnectAndSave = async () => {
+    if (!gasUrl.trim()) {
+      alert('Please enter a valid Google Apps Script Web App URL.');
+      return;
+    }
+
+    setIsConnecting(true);
+    try {
+      const res = await ApiService.connectAndInitializeSheet(gasUrl.trim(), spreadsheetId.trim());
+      if (res.success) {
+        if (onSave) onSave();
+        setTestResult({
+          tested: true,
+          success: true,
+          message: res.message,
+        });
+        onClose();
+      } else {
+        setTestResult({
+          tested: true,
+          success: false,
+          message: res.message,
+        });
+      }
+    } catch (err: any) {
+      setTestResult({
+        tested: true,
+        success: false,
+        message: err.message || 'Failed to connect.',
+      });
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (window.confirm('Are you sure you want to disconnect this Google Sheet? The application will return to disconnected state until you reconnect.')) {
+      setIsDisconnecting(true);
+      try {
+        await ApiService.disconnectGoogleSheet();
+        setGasUrl('');
+        setTestResult(null);
+        if (onSave) onSave();
+        onClose();
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsDisconnecting(false);
+      }
+    }
   };
 
   const tabsSchema = [
@@ -103,6 +146,14 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
     {
       tab: 'Reference_Responses',
       cols: 'Response_ID, Token, Source_Alumni_ID, Source_SC_ID, Reference_Name, Relation, Mobile, Email, Course_Interest, Preferred_Contact_Time, Remark, Submitted_Date, Lead_ID',
+    },
+    {
+      tab: 'Audit_Logs',
+      cols: 'Log_ID, Timestamp, Entity_Type, Entity_ID, Action, Performed_By_Role, Performed_By_User_ID, Performed_By_User_Name, Details',
+    },
+    {
+      tab: 'Archived_Records',
+      cols: 'Archive_ID, Original_ID, Entity_Type, Name_Identifier, Archived_At, Archived_By_User, Archived_By_Role, Reason, Snapshot_JSON',
     },
     {
       tab: 'Settings',
@@ -225,6 +276,27 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
                   </p>
                 </div>
 
+                {/* Connection Status & Mode Banner */}
+                <div className="p-3 rounded-lg border flex items-center justify-between text-xs bg-slate-50 border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full ${
+                        isCurrentlyConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                      }`}
+                    />
+                    <span className="font-semibold text-slate-800">
+                      {isCurrentlyConnected
+                        ? 'Persistent Connection Active'
+                        : 'Currently Disconnected'}
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {isCurrentlyConnected
+                        ? '(Maintained automatically across all refreshes until manually disconnected)'
+                        : '(Connect once to auto-create all 9 tabs and sync data)'}
+                    </span>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block font-bold text-slate-700 uppercase tracking-wide mb-1">
                     Target Spreadsheet Name
@@ -337,21 +409,43 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
 
         {/* Footer */}
         <div className="p-4 bg-slate-100 border-t border-slate-200 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
-          >
-            Close
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+            >
+              Close
+            </button>
+
+            {activeTab === 'config' && isCurrentlyConnected && (
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                disabled={isDisconnecting}
+                className="px-3.5 py-2 text-xs font-semibold text-rose-700 hover:text-rose-900 hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors disabled:opacity-50"
+                title="Disconnect this Google Sheet"
+              >
+                {isDisconnecting ? 'Disconnecting...' : 'Disconnect Sheet'}
+              </button>
+            )}
+          </div>
 
           {activeTab === 'config' && (
             <button
               type="button"
-              onClick={handleSaveSettings}
-              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-md shadow-indigo-600/20"
+              onClick={handleConnectAndSave}
+              disabled={isConnecting}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-2 disabled:opacity-60"
             >
-              Save Configuration
+              <RefreshCw className={`w-3.5 h-3.5 ${isConnecting ? 'animate-spin' : ''}`} />
+              <span>
+                {isConnecting
+                  ? 'Connecting & Initializing 9 Tabs...'
+                  : isCurrentlyConnected
+                  ? 'Update & Re-sync Sheets'
+                  : 'Connect & Initialize Sheet'}
+              </span>
             </button>
           )}
         </div>

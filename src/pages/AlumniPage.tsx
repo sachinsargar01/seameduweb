@@ -16,12 +16,14 @@ import {
   Share2,
   RefreshCw,
   Edit3,
+  Trash2,
 } from 'lucide-react';
 import { Alumni, CallStatus, SCUser } from '../types';
 import { StorageService } from '../services/storage';
 import { ApiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { EditAlumniModal } from '../components/EditAlumniModal';
+import { DeleteConfirmationModal } from '../components/DeleteConfirmationModal';
 
 interface AlumniPageProps {
   onOpenCallModal: (alumni: Alumni) => void;
@@ -53,6 +55,12 @@ export const AlumniPage: React.FC<AlumniPageProps> = ({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [targetReassignSC, setTargetReassignSC] = useState('');
   const [isReassigning, setIsReassigning] = useState(false);
+
+  // Delete modal state (Admin)
+  const [deletingAlumni, setDeletingAlumni] = useState<Alumni | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   const loadData = () => {
     const list = StorageService.getAlumni();
@@ -171,7 +179,37 @@ export const AlumniPage: React.FC<AlumniPageProps> = ({
     loadData();
     setSelectedIds([]);
     setIsReassigning(false);
-    alert(`Successfully reassigned ${selectedIds.length} alumni to ${targetSC.name}!`);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingAlumni) return;
+    setIsDeleting(true);
+    try {
+      await ApiService.deleteAlumni(deletingAlumni.id, user?.id, user?.name);
+      loadData();
+      setDeletingAlumni(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      for (const id of selectedIds) {
+        await ApiService.deleteAlumni(id, user?.id, user?.name);
+      }
+      loadData();
+      setSelectedIds([]);
+      setShowBulkDeleteModal(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsBulkDeleting(false);
+    }
   };
 
   const handleExportCSV = () => {
@@ -388,6 +426,14 @@ export const AlumniPage: React.FC<AlumniPageProps> = ({
               {isReassigning ? 'Reassigning...' : 'Confirm Reassign'}
             </button>
             <button
+              onClick={() => setShowBulkDeleteModal(true)}
+              className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded font-bold transition-colors shadow-xs flex items-center gap-1"
+              title="Delete all selected alumni records"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected</span>
+            </button>
+            <button
               onClick={() => setSelectedIds([])}
               className="px-2 py-1 text-slate-500 hover:text-slate-800"
             >
@@ -567,14 +613,25 @@ export const AlumniPage: React.FC<AlumniPageProps> = ({
                       <td className="p-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {role === 'ADMIN' && (
-                            <button
-                              type="button"
-                              onClick={() => setEditingAlumni(alumni)}
-                              className="p-1 bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 rounded transition-colors border border-slate-200"
-                              title="Edit Alumni Details & Google Sheets Record"
-                            >
-                              <Edit3 className="w-3 h-3" />
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setEditingAlumni(alumni)}
+                                className="p-1 bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 rounded transition-colors border border-slate-200"
+                                title="Edit Alumni Details & Google Sheets Record"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setDeletingAlumni(alumni)}
+                                className="p-1 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition-colors border border-slate-200 hover:border-rose-300"
+                                title="Delete Alumni (Deletes from app and connected Google Sheet)"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </>
                           )}
 
                           <button
@@ -603,6 +660,45 @@ export const AlumniPage: React.FC<AlumniPageProps> = ({
           isOpen={Boolean(editingAlumni)}
           onClose={() => setEditingAlumni(null)}
           onSuccess={loadData}
+        />
+      )}
+
+      {/* Single Delete Confirmation Modal */}
+      {deletingAlumni && (
+        <DeleteConfirmationModal
+          isOpen={Boolean(deletingAlumni)}
+          title="Delete Alumni Record"
+          recordName={deletingAlumni.name}
+          recordId={deletingAlumni.id}
+          description="Are you sure you want to delete this alumni record? This will permanently remove the record from active rosters and delete it immediately from the connected Google Sheet."
+          recordDetails={[
+            { label: 'Alumni ID', value: deletingAlumni.id },
+            { label: 'Full Name', value: deletingAlumni.name },
+            { label: 'Mobile', value: deletingAlumni.mobile },
+            { label: 'Course', value: deletingAlumni.course },
+            { label: 'Batch', value: deletingAlumni.batch },
+            { label: 'Assigned SC', value: deletingAlumni.assignedSCName || 'Unassigned' },
+          ]}
+          isDeleting={isDeleting}
+          onConfirm={handleConfirmDelete}
+          onClose={() => !isDeleting && setDeletingAlumni(null)}
+        />
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <DeleteConfirmationModal
+          isOpen={showBulkDeleteModal}
+          title={`Delete ${selectedIds.length} Selected Alumni`}
+          recordName={`${selectedIds.length} Alumni Records`}
+          description={`Are you sure you want to delete ${selectedIds.length} alumni records? All records will be removed from the active database and deleted immediately from the connected Google Sheet.`}
+          recordDetails={[
+            { label: 'Total Records', value: `${selectedIds.length} alumni` },
+            { label: 'Affected IDs', value: selectedIds.slice(0, 5).join(', ') + (selectedIds.length > 5 ? ` +${selectedIds.length - 5} more` : '') },
+          ]}
+          isDeleting={isBulkDeleting}
+          onConfirm={handleConfirmBulkDelete}
+          onClose={() => !isBulkDeleting && setShowBulkDeleteModal(false)}
         />
       )}
     </div>

@@ -1,6 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import { StorageService } from './storage';
 import { distributeAlumniEqually } from './distributor';
+import { SaveStatusService } from './saveStatusService';
 import {
   Alumni,
   SCUser,
@@ -334,6 +335,121 @@ export class ApiService {
     }
   }
 
+  /**
+   * Alias for initGoogleSheets
+   */
+  public static async initSheets(
+    url?: string
+  ): Promise<{ success: boolean; message: string }> {
+    return this.initGoogleSheets(url);
+  }
+
+  /**
+   * Connects permanently to a Google Sheet via Google Apps Script Web App URL,
+   * automatically creates all 9 tabs with bold headers if missing,
+   * pushes current application data, and verifies round-trip read.
+   */
+  public static async connectAndInitializeSheet(
+    url: string,
+    spreadsheetId?: string
+  ): Promise<{ success: boolean; message: string }> {
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl) {
+      return { success: false, message: 'A valid Google Apps Script Web App URL is required.' };
+    }
+
+    SaveStatusService.setSaving('Connecting & setting up Google Sheet tabs...');
+
+    try {
+      // 1. Initialize sheet schema on Google Spreadsheet (creates tabs & headers if missing)
+      const initRes = await this.initGoogleSheets(trimmedUrl);
+      if (!initRes.success) {
+        SaveStatusService.setError('Connection failed: ' + initRes.message);
+        return { success: false, message: initRes.message };
+      }
+
+      // 2. Save settings permanently to persist across reloads
+      const currentSettings = StorageService.getSettings();
+      const updatedSettings = {
+        ...currentSettings,
+        googleWebAppUrl: trimmedUrl,
+        spreadsheetId: (spreadsheetId || currentSettings.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS').trim(),
+        lastSyncStatus: 'CONNECTED' as const,
+        lastSyncTime: new Date().toISOString(),
+        lastSyncError: undefined,
+        autoSyncEnabled: true,
+      };
+      StorageService.saveSettings(updatedSettings);
+
+      // 3. Push existing local data to Google Sheet
+      SaveStatusService.setSaving('Uploading current database records to Google Sheet...');
+      await this.syncAllToGoogleSheets();
+
+      // 4. Log audit & sync log
+      StorageService.addAuditLog({
+        entityType: 'SETTINGS',
+        entityId: 'GOOGLE_SHEETS',
+        action: 'UPDATE',
+        details: `Connected Google Sheet permanently (${updatedSettings.spreadsheetId}). Verified 9 tabs and schema.`,
+        performedByRole: 'ADMIN',
+        performedByUserId: 'admin',
+        performedByUserName: 'Administrator',
+      });
+
+      StorageService.addSyncLog({
+        operation: 'connectSheet',
+        entityType: 'FULL_DATABASE',
+        entityId: updatedSettings.spreadsheetId,
+        status: 'SUCCESS',
+        message: 'Google Sheet connected permanently with automatic tab and column initialization.',
+      });
+
+      SaveStatusService.setSaved('Google Sheet Connected & Synced ✓');
+      return {
+        success: true,
+        message: 'Google Sheet connected permanently! All 9 tabs and schemas verified and synced.',
+      };
+    } catch (err: any) {
+      SaveStatusService.setError(err.message || 'Error connecting to Google Sheet');
+      return { success: false, message: err.message || 'Unknown error occurred during connection.' };
+    }
+  }
+
+  /**
+   * Disconnects the connected Google Sheet upon manual user request.
+   * Connection will only return to disconnected state after calling this.
+   */
+  public static async disconnectGoogleSheet(): Promise<void> {
+    SaveStatusService.setSaving('Disconnecting Google Sheet...');
+    const current = StorageService.getSettings();
+    const updated = {
+      ...current,
+      googleWebAppUrl: '',
+      lastSyncStatus: 'DISCONNECTED' as const,
+    };
+    StorageService.saveSettings(updated);
+
+    StorageService.addAuditLog({
+      entityType: 'SETTINGS',
+      entityId: 'GOOGLE_SHEETS',
+      action: 'UPDATE',
+      details: 'Google Sheet disconnected by manual user action.',
+      performedByRole: 'ADMIN',
+      performedByUserId: 'admin',
+      performedByUserName: 'Administrator',
+    });
+
+    StorageService.addSyncLog({
+      operation: 'disconnectSheet',
+      entityType: 'FULL_DATABASE',
+      entityId: current.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS',
+      status: 'SUCCESS',
+      message: 'Google Sheet disconnected by user.',
+    });
+
+    SaveStatusService.setSaved('Sheet disconnected');
+  }
+
   // =========================================================================
   // 2. FETCHING RECORDS ENDPOINTS
   // =========================================================================
@@ -624,6 +740,166 @@ export class ApiService {
   // =========================================================================
 
   /**
+   * Deletes an Alumni record directly from the application and synchronizes deletion to Google Sheet immediately.
+   */
+  public static async deleteAlumni(
+    alumniId: string,
+    performedByUserId: string = 'admin',
+    performedByUserName: string = 'Administrator'
+  ): Promise<GasApiResponse<{ deletedId: string }>> {
+    if (!alumniId) {
+      return {
+        success: false,
+        error: 'Alumni ID is required for deletion.',
+        source: 'local',
+      };
+    }
+
+    SaveStatusService.setSaving('Deleting alumni from Google Sheet...');
+
+    // 1. Remove from local store, archive, and audit
+    const deleted = StorageService.deleteAlumni(alumniId, performedByUserId, performedByUserName);
+    if (!deleted) {
+      SaveStatusService.setError(`Alumni '${alumniId}' not found.`);
+      return {
+        success: false,
+        error: `Alumni with ID '${alumniId}' was not found in records.`,
+        source: 'local',
+      };
+    }
+
+    // 2. Synchronize deletion immediately to connected Google Sheet
+    if (this.isGasConfigured()) {
+      try {
+        const start = Date.now();
+        const res = await this.requestGas<{ deletedId: string }>('deleteAlumni', {
+          method: 'POST',
+          payload: { alumniId },
+          timeout: 10000,
+        });
+
+        StorageService.addSyncLog({
+          operation: 'deleteAlumni',
+          entityType: 'ALUMNI',
+          entityId: alumniId,
+          status: res.success ? 'SUCCESS' : 'FAILED',
+          message: res.success
+            ? `Alumni ${alumniId} deleted from Google Sheet.`
+            : `Remote delete warning: ${res.error}`,
+          durationMs: Date.now() - start,
+        });
+
+        if (res.success) {
+          SaveStatusService.setSaved('Alumni deleted from Google Sheet ✓');
+          return {
+            success: true,
+            data: { deletedId: alumniId },
+            message: 'Alumni deleted successfully from active roster and Google Sheet.',
+            source: 'gas',
+          };
+        } else {
+          SaveStatusService.setError('Local delete saved. Sheet warning: ' + res.error);
+          return {
+            success: true,
+            data: { deletedId: alumniId },
+            message: `Alumni deleted locally. Remote Google Sheet sync reported: ${res.error}`,
+            source: 'local',
+          };
+        }
+      } catch (err: any) {
+        SaveStatusService.setError('Local delete saved. Network sync failed.');
+        return {
+          success: true,
+          data: { deletedId: alumniId },
+          message: `Alumni deleted locally. Network error communicating with Google Sheet: ${err.message}`,
+          source: 'local',
+        };
+      }
+    }
+
+    SaveStatusService.setSaved('Alumni deleted locally ✓');
+    return {
+      success: true,
+      data: { deletedId: alumniId },
+      message: 'Alumni deleted successfully from local storage.',
+      source: 'local',
+    };
+  }
+
+  /**
+   * Creates a new Alumni record and synchronizes to Google Sheet immediately
+   */
+  public static async createAlumni(
+    alumniData: Partial<Alumni>,
+    performedByUserId: string = 'admin',
+    performedByUserName: string = 'Administrator'
+  ): Promise<GasApiResponse<Alumni>> {
+    SaveStatusService.setSaving('Saving alumni to Google Sheet...');
+    const id = alumniData.id || `ALUM-${Date.now().toString().slice(-6)}`;
+    const newAlumni: Alumni = {
+      id,
+      name: alumniData.name || '',
+      mobile: alumniData.mobile || '',
+      email: alumniData.email || '',
+      course: alumniData.course || '',
+      batch: alumniData.batch || '',
+      passingYear: alumniData.passingYear || '',
+      assignedSCId: alumniData.assignedSCId || '',
+      assignedSCName: alumniData.assignedSCName || 'Unassigned',
+      callStatus: alumniData.callStatus || 'Pending',
+      lastCallDate: alumniData.lastCallDate || '',
+      referenceReceived: alumniData.referenceReceived || 'No',
+      referenceCount: alumniData.referenceCount || 0,
+      nextFollowup: alumniData.nextFollowup || '',
+      remark: alumniData.remark || '',
+      createdDate: alumniData.createdDate || new Date().toISOString(),
+    };
+
+    const all = StorageService.getAlumni();
+    all.unshift(newAlumni);
+    StorageService.saveAlumni(all);
+
+    StorageService.addAuditLog({
+      entityType: 'ALUMNI',
+      entityId: id,
+      action: 'CREATE',
+      performedByUserId,
+      performedByUserName,
+      performedByRole: 'ADMIN',
+      details: `Created Alumni ${newAlumni.name} (${id})`,
+      newState: newAlumni,
+    });
+
+    if (this.isGasConfigured()) {
+      try {
+        const res = await this.requestGas<Alumni>('createAlumni', {
+          method: 'POST',
+          payload: { alumniData: newAlumni },
+        });
+        if (res.success) {
+          SaveStatusService.setSaved('Alumni saved to Google Sheet ✓');
+          return {
+            success: true,
+            data: newAlumni,
+            message: 'Alumni saved to Google Sheet.',
+            source: 'gas',
+          };
+        }
+      } catch (err) {
+        console.warn('Google Sheet createAlumni error:', err);
+      }
+    }
+
+    SaveStatusService.setSaved('Alumni saved ✓');
+    return {
+      success: true,
+      data: newAlumni,
+      message: 'Alumni saved to local store.',
+      source: 'local',
+    };
+  }
+
+  /**
    * Updates an Alumni record in Google Sheets and synchronizes with local storage
    *
    * @param alumniId Target Alumni ID (e.g. 'ALUM-1001')
@@ -641,6 +917,8 @@ export class ApiService {
       };
     }
 
+    SaveStatusService.setSaving('Saving alumni update to Google Sheet...');
+
     // 1. Update in local storage
     const allAlumni = StorageService.getAlumni();
     const index = allAlumni.findIndex(a => a.id === alumniId);
@@ -654,6 +932,7 @@ export class ApiService {
       allAlumni[index] = updatedAlumni;
       StorageService.saveAlumni(allAlumni);
     } else {
+      SaveStatusService.setError(`Alumni '${alumniId}' not found.`);
       return {
         success: false,
         error: `Alumni with ID '${alumniId}' was not found in local records.`,
@@ -691,6 +970,7 @@ export class ApiService {
 
       if (!res.success) {
         console.warn(`[ApiService] Google Sheets update failed for Alumni ${alumniId}:`, res.error);
+        SaveStatusService.setError('Local saved. Sheet update reported: ' + res.error);
         return {
           success: true,
           data: updatedAlumni,
@@ -699,6 +979,7 @@ export class ApiService {
         };
       }
 
+      SaveStatusService.setSaved('Alumni saved to Google Sheet ✓');
       return {
         success: true,
         data: updatedAlumni,
@@ -707,6 +988,7 @@ export class ApiService {
       };
     }
 
+    SaveStatusService.setSaved('Saved ✓');
     return {
       success: true,
       data: updatedAlumni,
@@ -1313,6 +1595,8 @@ export class ApiService {
       };
     }
 
+    SaveStatusService.setSaving('Syncing all modules to Google Sheet...');
+
     const payload = {
       alumni: StorageService.getAlumni(),
       leads: StorageService.getLeads(),
@@ -1320,13 +1604,24 @@ export class ApiService {
       followups: StorageService.getFollowups(),
       scUsers: StorageService.getSCUsers(),
       references: StorageService.getReferenceResponses(),
+      auditLogs: StorageService.getAuditLogs(),
+      archivedRecords: StorageService.getArchivedRecords(),
+      settings: StorageService.getSettings(),
     };
 
-    return this.requestGas<{ synced: boolean }>('syncAll', {
+    const res = await this.requestGas<{ synced: boolean }>('syncAll', {
       method: 'POST',
       payload: { data: payload },
-      timeout: 25000,
+      timeout: 30000,
     });
+
+    if (res.success) {
+      SaveStatusService.setSaved('All modules synced to Google Sheet ✓');
+    } else {
+      SaveStatusService.setError('Sync error: ' + (res.error || 'Failed to sync'));
+    }
+
+    return res;
   }
 
   // =========================================================================

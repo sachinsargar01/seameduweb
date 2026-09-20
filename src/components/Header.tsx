@@ -2,6 +2,7 @@ import React from 'react';
 import { Search, Database, PlusCircle, Bell, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { StorageService } from '../services/storage';
+import { SaveStatusIndicator } from './SaveStatusIndicator';
 
 interface HeaderProps {
   title: string;
@@ -52,6 +53,9 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Action Controls & Status */}
       <div className="flex items-center gap-3">
+        {/* Real-time saving/saved indicator */}
+        <SaveStatusIndicator />
+
         {/* Google Apps Script & Sheets Status Pill (Admin Only) */}
         {role === 'ADMIN' && (
           <button
