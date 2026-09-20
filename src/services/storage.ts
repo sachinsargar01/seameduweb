@@ -411,6 +411,77 @@ export class StorageService {
     }
   }
 
+  static getActiveUser(): any | null {
+    try {
+      const session = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
+      return session ? JSON.parse(session) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  static switchUserContext(user: any) {
+    if (!user || !user.id) return;
+    const userKey = user.id;
+
+    // 1. Settings Isolation
+    const userSettingsRaw = localStorage.getItem(`${STORAGE_KEYS.SETTINGS}_${userKey}`);
+    let activeSettings: SystemSettings;
+    if (userSettingsRaw) {
+      try {
+        activeSettings = JSON.parse(userSettingsRaw);
+      } catch {
+        activeSettings = { ...INITIAL_SETTINGS };
+      }
+      if (user.googleWebAppUrl !== undefined) {
+        activeSettings.googleWebAppUrl = user.googleWebAppUrl;
+        activeSettings.spreadsheetId = user.spreadsheetId || activeSettings.spreadsheetId;
+        activeSettings.lastSyncStatus = user.lastSyncStatus || activeSettings.lastSyncStatus;
+        activeSettings.lastSyncTime = user.lastSyncTime || activeSettings.lastSyncTime;
+      }
+    } else {
+      activeSettings = {
+        ...INITIAL_SETTINGS,
+        googleWebAppUrl: user.googleWebAppUrl || '',
+        spreadsheetId: user.spreadsheetId || '',
+        lastSyncStatus: user.lastSyncStatus || (user.googleWebAppUrl ? 'CONNECTED' : 'DISCONNECTED'),
+        lastSyncTime: user.lastSyncTime,
+      };
+    }
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(activeSettings));
+    localStorage.setItem(`${STORAGE_KEYS.SETTINGS}_${userKey}`, JSON.stringify(activeSettings));
+
+    // 2. Data Records Isolation: load this user's cached records if exist
+    const cachedAlumni = localStorage.getItem(`${STORAGE_KEYS.ALUMNI}_${userKey}`);
+    if (cachedAlumni) {
+      localStorage.setItem(STORAGE_KEYS.ALUMNI, cachedAlumni);
+    } else if (!user.googleWebAppUrl && user.role === 'ADMIN' && user.username !== 'admin') {
+      // Clean slate for brand-new admin who has not connected their own sheet yet
+      localStorage.setItem(STORAGE_KEYS.ALUMNI, JSON.stringify([]));
+    }
+
+    const cachedLeads = localStorage.getItem(`${STORAGE_KEYS.LEADS}_${userKey}`);
+    if (cachedLeads) {
+      localStorage.setItem(STORAGE_KEYS.LEADS, cachedLeads);
+    } else if (!user.googleWebAppUrl && user.role === 'ADMIN' && user.username !== 'admin') {
+      localStorage.setItem(STORAGE_KEYS.LEADS, JSON.stringify([]));
+    }
+
+    const cachedCalls = localStorage.getItem(`${STORAGE_KEYS.CALL_LOGS}_${userKey}`);
+    if (cachedCalls) {
+      localStorage.setItem(STORAGE_KEYS.CALL_LOGS, cachedCalls);
+    } else if (!user.googleWebAppUrl && user.role === 'ADMIN' && user.username !== 'admin') {
+      localStorage.setItem(STORAGE_KEYS.CALL_LOGS, JSON.stringify([]));
+    }
+
+    const cachedFollowups = localStorage.getItem(`${STORAGE_KEYS.FOLLOWUPS}_${userKey}`);
+    if (cachedFollowups) {
+      localStorage.setItem(STORAGE_KEYS.FOLLOWUPS, cachedFollowups);
+    } else if (!user.googleWebAppUrl && user.role === 'ADMIN' && user.username !== 'admin') {
+      localStorage.setItem(STORAGE_KEYS.FOLLOWUPS, JSON.stringify([]));
+    }
+  }
+
   // ALUMNI
   static getAlumni(): Alumni[] {
     this.initialize();
@@ -420,6 +491,10 @@ export class StorageService {
 
   static saveAlumni(alumniList: Alumni[]) {
     localStorage.setItem(STORAGE_KEYS.ALUMNI, JSON.stringify(alumniList));
+    const activeUser = this.getActiveUser();
+    if (activeUser?.id) {
+      localStorage.setItem(`${STORAGE_KEYS.ALUMNI}_${activeUser.id}`, JSON.stringify(alumniList));
+    }
   }
 
   static updateAlumni(updated: Alumni) {
@@ -575,6 +650,10 @@ export class StorageService {
 
   static saveLeads(leads: Lead[]) {
     localStorage.setItem(STORAGE_KEYS.LEADS, JSON.stringify(leads));
+    const activeUser = this.getActiveUser();
+    if (activeUser?.id) {
+      localStorage.setItem(`${STORAGE_KEYS.LEADS}_${activeUser.id}`, JSON.stringify(leads));
+    }
   }
 
   static addLead(lead: Lead) {
@@ -665,14 +744,48 @@ export class StorageService {
   }
 
   // SETTINGS
-  static getSettings(): SystemSettings {
+  static getSettings(userId?: string): SystemSettings {
     this.initialize();
+    const activeUser = this.getActiveUser();
+    const targetUserId = userId || activeUser?.id;
+
+    if (targetUserId) {
+      const userSettings = localStorage.getItem(`${STORAGE_KEYS.SETTINGS}_${targetUserId}`);
+      if (userSettings) {
+        try {
+          return JSON.parse(userSettings);
+        } catch {}
+      }
+      if (activeUser?.id === targetUserId && activeUser.googleWebAppUrl !== undefined) {
+        return {
+          ...INITIAL_SETTINGS,
+          googleWebAppUrl: activeUser.googleWebAppUrl || '',
+          spreadsheetId: activeUser.spreadsheetId || '',
+          lastSyncStatus: activeUser.lastSyncStatus || (activeUser.googleWebAppUrl ? 'CONNECTED' : 'DISCONNECTED'),
+          lastSyncTime: activeUser.lastSyncTime,
+        };
+      }
+    }
+
     const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     return data ? JSON.parse(data) : INITIAL_SETTINGS;
   }
 
-  static saveSettings(settings: SystemSettings) {
+  static saveSettings(settings: SystemSettings, userId?: string) {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    const activeUser = this.getActiveUser();
+    const targetUserId = userId || activeUser?.id;
+
+    if (targetUserId) {
+      localStorage.setItem(`${STORAGE_KEYS.SETTINGS}_${targetUserId}`, JSON.stringify(settings));
+      if (activeUser && activeUser.id === targetUserId) {
+        activeUser.googleWebAppUrl = settings.googleWebAppUrl;
+        activeUser.spreadsheetId = settings.spreadsheetId;
+        activeUser.lastSyncStatus = settings.lastSyncStatus;
+        activeUser.lastSyncTime = settings.lastSyncTime;
+        localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(activeUser));
+      }
+    }
   }
 
   // AUDIT LOGS

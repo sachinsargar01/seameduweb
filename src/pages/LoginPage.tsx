@@ -82,7 +82,7 @@ export const LoginPage: React.FC = () => {
     // Simulated short authentication handshake
     await new Promise((res) => setTimeout(res, 200));
 
-    const result: LoginResult = login(trimmedUser, trimmedPass);
+    const result: LoginResult = await login(trimmedUser, trimmedPass);
 
     if (result.success) {
       navigate('/dashboard');
@@ -137,7 +137,7 @@ export const LoginPage: React.FC = () => {
     setLoading(true);
     await new Promise((res) => setTimeout(res, 250));
 
-    const regResult = registerAdmin({
+    const regResult = await registerAdmin({
       name: regName.trim(),
       username: regUsername.trim(),
       email: regEmail.trim() || `${regUsername.toLowerCase()}@seamedu.com`,

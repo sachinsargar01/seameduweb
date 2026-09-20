@@ -26,8 +26,8 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing = false,
 }) => {
   const { role, user } = useAuth();
-  const settings = StorageService.getSettings();
-  const hasGasUrl = !!settings.googleWebAppUrl;
+  const settings = StorageService.getSettings(user?.id);
+  const hasGasUrl = Boolean((user?.googleWebAppUrl || settings.googleWebAppUrl) && settings.lastSyncStatus !== 'DISCONNECTED');
 
   return (
     <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-10 shadow-xs">

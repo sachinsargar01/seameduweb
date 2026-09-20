@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Database,
@@ -10,10 +10,12 @@ import {
   AlertCircle,
   Code2,
   FileSpreadsheet,
+  UserCheck,
 } from 'lucide-react';
 import { StorageService } from '../services/storage';
 import { ApiService } from '../services/api';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../services/gasBackendCode';
+import { useAuth } from '../context/AuthContext';
 
 interface GasSetupModalProps {
   isOpen: boolean;
@@ -26,12 +28,25 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
   onClose,
   onSave,
 }) => {
-  const currentSettings = StorageService.getSettings();
-  const [gasUrl, setGasUrl] = useState(currentSettings.googleWebAppUrl || '');
+  const { user } = useAuth();
+  const currentSettings = StorageService.getSettings(user?.id);
+  const [gasUrl, setGasUrl] = useState(user?.googleWebAppUrl || currentSettings.googleWebAppUrl || '');
   const [spreadsheetId, setSpreadsheetId] = useState(
-    currentSettings.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS'
+    user?.spreadsheetId || currentSettings.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS'
   );
-  const isCurrentlyConnected = Boolean(currentSettings.googleWebAppUrl && currentSettings.lastSyncStatus !== 'DISCONNECTED');
+
+  useEffect(() => {
+    if (isOpen) {
+      const activeSettings = StorageService.getSettings(user?.id);
+      setGasUrl(user?.googleWebAppUrl || activeSettings.googleWebAppUrl || '');
+      setSpreadsheetId(user?.spreadsheetId || activeSettings.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS');
+    }
+  }, [isOpen, user?.googleWebAppUrl, user?.spreadsheetId, user?.id]);
+
+  const isCurrentlyConnected = Boolean(
+    (user?.googleWebAppUrl || currentSettings.googleWebAppUrl) &&
+    currentSettings.lastSyncStatus !== 'DISCONNECTED'
+  );
   const [copiedCode, setCopiedCode] = useState(false);
   const [testResult, setTestResult] = useState<{
     tested: boolean;
@@ -78,7 +93,13 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
 
     setIsConnecting(true);
     try {
-      const res = await ApiService.connectAndInitializeSheet(gasUrl.trim(), spreadsheetId.trim());
+      const res = await ApiService.connectAndInitializeSheet(
+        gasUrl.trim(),
+        spreadsheetId.trim(),
+        user?.id,
+        user?.email,
+        user?.name
+      );
       if (res.success) {
         if (onSave) onSave();
         setTestResult({
@@ -106,10 +127,10 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
   };
 
   const handleDisconnect = async () => {
-    if (window.confirm('Are you sure you want to disconnect this Google Sheet? The application will return to disconnected state until you reconnect.')) {
+    if (window.confirm('Are you sure you want to disconnect this Google Sheet from your account? Your account will return to disconnected state until you reconnect.')) {
       setIsDisconnecting(true);
       try {
-        await ApiService.disconnectGoogleSheet();
+        await ApiService.disconnectGoogleSheet(user?.id);
         setGasUrl('');
         setTestResult(null);
         if (onSave) onSave();
@@ -276,24 +297,34 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({
                   </p>
                 </div>
 
-                {/* Connection Status & Mode Banner */}
-                <div className="p-3 rounded-lg border flex items-center justify-between text-xs bg-slate-50 border-slate-200">
-                  <div className="flex items-center gap-2">
+                {/* Connection Status & Account Mode Banner */}
+                <div className="p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-slate-50 border-slate-200">
+                  <div className="flex items-start sm:items-center gap-2.5">
                     <span
-                      className={`w-2.5 h-2.5 rounded-full ${
+                      className={`w-2.5 h-2.5 rounded-full mt-1 sm:mt-0 shrink-0 ${
                         isCurrentlyConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
                       }`}
                     />
-                    <span className="font-semibold text-slate-800">
-                      {isCurrentlyConnected
-                        ? 'Persistent Connection Active'
-                        : 'Currently Disconnected'}
-                    </span>
-                    <span className="text-[11px] text-slate-500">
-                      {isCurrentlyConnected
-                        ? '(Maintained automatically across all refreshes until manually disconnected)'
-                        : '(Connect once to auto-create all 9 tabs and sync data)'}
-                    </span>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-slate-800">
+                          {isCurrentlyConnected
+                            ? 'Permanent Account Connection Active'
+                            : 'Currently Disconnected'}
+                        </span>
+                        {user && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            <UserCheck className="w-3 h-3 text-indigo-600" />
+                            <span>Linked to {user.name} ({user.username})</span>
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {isCurrentlyConnected
+                          ? 'This Google Sheet is permanently linked to your account. Logging in from any device or browser automatically restores this connection.'
+                          : 'Connect once to permanently link this Google Sheet to your administrator account across all devices.'}
+                      </p>
+                    </div>
                   </div>
                 </div>
 

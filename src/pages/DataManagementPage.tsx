@@ -86,7 +86,7 @@ export const DataManagementPage: React.FC<DataManagementPageProps> = ({ onOpenGa
     setAuditLogs(StorageService.getAuditLogs());
     setSyncLogs(StorageService.getSyncLogs());
     setArchivedRecords(StorageService.getArchivedRecords());
-    setSettings(StorageService.getSettings());
+    setSettings(StorageService.getSettings(user?.id));
     setScUsers(StorageService.getSCUsers());
     setAdminUsers(StorageService.getAdminUsers());
     setAlumniList(StorageService.getAlumni());
@@ -95,7 +95,7 @@ export const DataManagementPage: React.FC<DataManagementPageProps> = ({ onOpenGa
 
   useEffect(() => {
     reloadAll();
-  }, []);
+  }, [user?.id]);
 
   // Compute Sync Metrics
   const totalSyncCount = syncLogs.length;

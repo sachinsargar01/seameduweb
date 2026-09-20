@@ -14,6 +14,7 @@ import {
   CallStatus,
   LeadStatus,
   RelationType,
+  UserSheetConnection,
 } from '../types';
 
 /**
@@ -345,18 +346,99 @@ export class ApiService {
   }
 
   /**
+   * Retrieves the persistent Google Sheet connection linked to a user account
+   */
+  public static async getUserSheetConnection(userId: string): Promise<{
+    success: boolean;
+    connection?: UserSheetConnection;
+    message?: string;
+  }> {
+    try {
+      const res = await axios.get(`/api/user/${userId}/sheet-connection`);
+      return res.data;
+    } catch (err: any) {
+      return { success: false, message: err?.response?.data?.message || err.message };
+    }
+  }
+
+  /**
+   * Permanently associates a Google Sheet with a specific User Account on the backend
+   */
+  public static async saveUserSheetConnection(
+    userId: string,
+    data: {
+      googleWebAppUrl: string;
+      spreadsheetId?: string;
+      userEmail?: string;
+      userName?: string;
+    }
+  ): Promise<{ success: boolean; connection?: any; message?: string }> {
+    try {
+      const res = await axios.post(`/api/user/${userId}/sheet-connection`, data);
+      return res.data;
+    } catch (err: any) {
+      return { success: false, message: err?.response?.data?.message || err.message };
+    }
+  }
+
+  /**
+   * Removes the Google Sheet connection for a specific User Account
+   */
+  public static async disconnectUserSheet(userId: string): Promise<{ success: boolean; message?: string }> {
+    try {
+      const res = await axios.delete(`/api/user/${userId}/sheet-connection`);
+      return res.data;
+    } catch (err: any) {
+      return { success: false, message: err?.response?.data?.message || err.message };
+    }
+  }
+
+  /**
+   * Backs up current records snapshot on the server for cross-device access
+   */
+  public static async saveUserDataSnapshot(userId: string, data: any): Promise<void> {
+    try {
+      await axios.post(`/api/user/${userId}/data-snapshot`, data);
+    } catch (err) {
+      console.warn('[ApiService] Failed to save user data snapshot to server:', err);
+    }
+  }
+
+  /**
+   * Retrieves server-backed records snapshot for a user account
+   */
+  public static async getUserDataSnapshot(userId: string): Promise<any | null> {
+    try {
+      const res = await axios.get(`/api/user/${userId}/data-snapshot`);
+      return res.data?.snapshot || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Connects permanently to a Google Sheet via Google Apps Script Web App URL,
+   * associates it permanently with the authenticated User Account,
    * automatically creates all 9 tabs with bold headers if missing,
    * pushes current application data, and verifies round-trip read.
    */
   public static async connectAndInitializeSheet(
     url: string,
-    spreadsheetId?: string
+    spreadsheetId?: string,
+    userId?: string,
+    userEmail?: string,
+    userName?: string
   ): Promise<{ success: boolean; message: string }> {
     const trimmedUrl = url.trim();
     if (!trimmedUrl) {
       return { success: false, message: 'A valid Google Apps Script Web App URL is required.' };
     }
+
+    const activeUser = StorageService.getActiveUser();
+    const targetUserId = userId || activeUser?.id || 'ADMIN-01';
+    const targetUserEmail = userEmail || activeUser?.email || '';
+    const targetUserName = userName || activeUser?.name || 'Administrator';
+    const targetSpreadsheetId = (spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS').trim();
 
     SaveStatusService.setSaving('Connecting & setting up Google Sheet tabs...');
 
@@ -368,32 +450,50 @@ export class ApiService {
         return { success: false, message: initRes.message };
       }
 
-      // 2. Save settings permanently to persist across reloads
-      const currentSettings = StorageService.getSettings();
+      // 2. Save settings locally for active user
+      const currentSettings = StorageService.getSettings(targetUserId);
       const updatedSettings = {
         ...currentSettings,
         googleWebAppUrl: trimmedUrl,
-        spreadsheetId: (spreadsheetId || currentSettings.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS').trim(),
+        spreadsheetId: targetSpreadsheetId,
         lastSyncStatus: 'CONNECTED' as const,
         lastSyncTime: new Date().toISOString(),
         lastSyncError: undefined,
         autoSyncEnabled: true,
       };
-      StorageService.saveSettings(updatedSettings);
+      StorageService.saveSettings(updatedSettings, targetUserId);
 
-      // 3. Push existing local data to Google Sheet
+      // 3. Persist permanently to the user's account on the server
+      await this.saveUserSheetConnection(targetUserId, {
+        googleWebAppUrl: trimmedUrl,
+        spreadsheetId: targetSpreadsheetId,
+        userEmail: targetUserEmail,
+        userName: targetUserName,
+      });
+
+      // 4. Push existing local data to Google Sheet
       SaveStatusService.setSaving('Uploading current database records to Google Sheet...');
       await this.syncAllToGoogleSheets();
 
-      // 4. Log audit & sync log
+      // 5. Backup snapshot on the server for cross-device consistency
+      await this.saveUserDataSnapshot(targetUserId, {
+        alumni: StorageService.getAlumni(),
+        leads: StorageService.getLeads(),
+        scUsers: StorageService.getSCUsers(),
+        callLogs: StorageService.getCallLogs(),
+        followups: StorageService.getFollowups(),
+        referenceResponses: StorageService.getReferenceResponses(),
+      });
+
+      // 6. Log audit & sync log
       StorageService.addAuditLog({
         entityType: 'SETTINGS',
         entityId: 'GOOGLE_SHEETS',
         action: 'UPDATE',
-        details: `Connected Google Sheet permanently (${updatedSettings.spreadsheetId}). Verified 9 tabs and schema.`,
+        details: `Connected Google Sheet permanently (${updatedSettings.spreadsheetId}) to account ${targetUserName} (${targetUserId}). Verified 9 tabs.`,
         performedByRole: 'ADMIN',
-        performedByUserId: 'admin',
-        performedByUserName: 'Administrator',
+        performedByUserId: targetUserId,
+        performedByUserName: targetUserName,
       });
 
       StorageService.addSyncLog({
@@ -401,13 +501,13 @@ export class ApiService {
         entityType: 'FULL_DATABASE',
         entityId: updatedSettings.spreadsheetId,
         status: 'SUCCESS',
-        message: 'Google Sheet connected permanently with automatic tab and column initialization.',
+        message: `Google Sheet connected permanently to user account ${targetUserId}.`,
       });
 
       SaveStatusService.setSaved('Google Sheet Connected & Synced ✓');
       return {
         success: true,
-        message: 'Google Sheet connected permanently! All 9 tabs and schemas verified and synced.',
+        message: `Google Sheet permanently linked to account (${targetUserName})! All 9 tabs and schemas verified.`,
       };
     } catch (err: any) {
       SaveStatusService.setError(err.message || 'Error connecting to Google Sheet');
@@ -416,27 +516,35 @@ export class ApiService {
   }
 
   /**
-   * Disconnects the connected Google Sheet upon manual user request.
+   * Disconnects the connected Google Sheet for the specified user account upon manual user request.
    * Connection will only return to disconnected state after calling this.
    */
-  public static async disconnectGoogleSheet(): Promise<void> {
+  public static async disconnectGoogleSheet(userId?: string): Promise<void> {
     SaveStatusService.setSaving('Disconnecting Google Sheet...');
-    const current = StorageService.getSettings();
+    const activeUser = StorageService.getActiveUser();
+    const targetUserId = userId || activeUser?.id || 'ADMIN-01';
+
+    const current = StorageService.getSettings(targetUserId);
     const updated = {
       ...current,
       googleWebAppUrl: '',
       lastSyncStatus: 'DISCONNECTED' as const,
     };
-    StorageService.saveSettings(updated);
+    StorageService.saveSettings(updated, targetUserId);
+
+    // Remove from server persistent store
+    if (targetUserId) {
+      await this.disconnectUserSheet(targetUserId);
+    }
 
     StorageService.addAuditLog({
       entityType: 'SETTINGS',
       entityId: 'GOOGLE_SHEETS',
       action: 'UPDATE',
-      details: 'Google Sheet disconnected by manual user action.',
+      details: `Google Sheet disconnected from account ${targetUserId} by manual user action.`,
       performedByRole: 'ADMIN',
-      performedByUserId: 'admin',
-      performedByUserName: 'Administrator',
+      performedByUserId: targetUserId,
+      performedByUserName: activeUser?.name || 'Administrator',
     });
 
     StorageService.addSyncLog({
@@ -444,7 +552,7 @@ export class ApiService {
       entityType: 'FULL_DATABASE',
       entityId: current.spreadsheetId || 'SEAMEDU_ADMISSIONS_FMS',
       status: 'SUCCESS',
-      message: 'Google Sheet disconnected by user.',
+      message: `Google Sheet disconnected from user account ${targetUserId}.`,
     });
 
     SaveStatusService.setSaved('Sheet disconnected');
@@ -531,6 +639,19 @@ export class ApiService {
       if (normalizedAlumni.length > 0) StorageService.saveAlumni(normalizedAlumni);
       if (normalizedLeads.length > 0) StorageService.saveLeads(normalizedLeads);
       if (normalizedSCs.length > 0) StorageService.saveSCUsers(normalizedSCs);
+
+      // Persist snapshot to server for cross-device availability
+      const activeUser = StorageService.getActiveUser();
+      if (activeUser?.id) {
+        this.saveUserDataSnapshot(activeUser.id, {
+          alumni: normalizedAlumni,
+          leads: normalizedLeads,
+          scUsers: normalizedSCs,
+          callLogs: normalizedCalls,
+          followups: normalizedFollowups,
+          referenceResponses: normalizedRefs,
+        });
+      }
 
       return {
         success: true,

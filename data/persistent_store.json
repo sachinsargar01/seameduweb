@@ -1,0 +1,67 @@
+{
+  "users": [
+    {
+      "id": "ADMIN-01",
+      "name": "Seamedu Management Admin",
+      "username": "admin",
+      "passwordHash": "admin123",
+      "role": "ADMIN",
+      "email": "admin@seamedu.com",
+      "mobile": "+91 98200 00001",
+      "googleWebAppUrl": "",
+      "spreadsheetId": "SEAMEDU_ADMISSIONS_FMS",
+      "lastSyncStatus": "DISCONNECTED",
+      "createdDate": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "SC-01",
+      "name": "Anjali Sharma",
+      "username": "anjali",
+      "passwordHash": "sc123",
+      "role": "SC",
+      "status": "Active",
+      "mobile": "+91 98201 12345",
+      "email": "anjali.s@seamedu.com",
+      "adminId": "ADMIN-01",
+      "createdDate": "2026-01-10T10:00:00Z"
+    },
+    {
+      "id": "SC-02",
+      "name": "Shweta Kulkarni",
+      "username": "shweta",
+      "passwordHash": "sc123",
+      "role": "SC",
+      "status": "Active",
+      "mobile": "+91 98202 23456",
+      "email": "shweta.k@seamedu.com",
+      "adminId": "ADMIN-01",
+      "createdDate": "2026-01-10T10:00:00Z"
+    },
+    {
+      "id": "SC-03",
+      "name": "Rohan Deshmukh",
+      "username": "rohan",
+      "passwordHash": "sc123",
+      "role": "SC",
+      "status": "Active",
+      "mobile": "+91 98203 34567",
+      "email": "rohan.d@seamedu.com",
+      "adminId": "ADMIN-01",
+      "createdDate": "2026-01-12T10:00:00Z"
+    },
+    {
+      "id": "SC-04",
+      "name": "Priya Verma",
+      "username": "priya",
+      "passwordHash": "sc123",
+      "role": "SC",
+      "status": "Inactive",
+      "mobile": "+91 98204 45678",
+      "email": "priya.v@seamedu.com",
+      "adminId": "ADMIN-01",
+      "createdDate": "2026-01-15T10:00:00Z"
+    }
+  ],
+  "userSheets": {},
+  "userSnapshots": {}
+}

@@ -37,6 +37,11 @@ export interface SCUser {
   mobile?: string;
   email?: string;
   createdDate: string;
+  adminId?: string; // Associated Admin ID
+  googleWebAppUrl?: string;
+  spreadsheetId?: string;
+  lastSyncStatus?: 'CONNECTED' | 'DISCONNECTED' | 'ERROR' | 'SYNCING';
+  lastSyncTime?: string;
 }
 
 export interface AdminUser {
@@ -47,6 +52,23 @@ export interface AdminUser {
   role: 'ADMIN';
   email: string;
   mobile?: string;
+  // User-Specific Permanent Google Sheet Connection
+  googleWebAppUrl?: string;
+  spreadsheetId?: string;
+  lastSyncStatus?: 'CONNECTED' | 'DISCONNECTED' | 'ERROR' | 'SYNCING';
+  lastSyncTime?: string;
+  connectedAt?: string;
+}
+
+export interface UserSheetConnection {
+  userId: string;
+  userEmail?: string;
+  userName?: string;
+  googleWebAppUrl: string;
+  spreadsheetId: string;
+  lastSyncStatus: 'CONNECTED' | 'DISCONNECTED' | 'ERROR' | 'SYNCING';
+  lastSyncTime?: string;
+  connectedAt?: string;
 }
 
 export type AuthUser = SCUser | AdminUser;
